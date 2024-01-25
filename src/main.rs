@@ -20,8 +20,24 @@ struct Window {
     source_bytes_max: usize,
     target_bytes_max: usize,
     target_lines_max: usize,
-    filter_in: Vec<Vec<String>>,
-    filter_out: Vec<Vec<String>>,
+    filter_in: Vec<FilterTerm>,
+    filter_out: Vec<FilterTerm>,
+}
+
+#[derive(Debug, serde::Serialize, serde::Deserialize, PartialEq)]
+#[serde(untagged)]
+enum FilterTerm {
+    String(String),
+    Vec(Vec<String>),
+}
+
+impl FilterTerm {
+    fn clauses(&self) -> &[String] {
+        match self {
+            FilterTerm::String(it) => std::slice::from_ref(it),
+            FilterTerm::Vec(it) => it.as_slice(),
+        }
+    }
 }
 
 #[allow(non_upper_case_globals)]
@@ -219,21 +235,21 @@ fn next_line<'a>(source: &'a [u8], source_pos: &mut usize, reverse: bool) -> &'a
     }
 }
 
-fn filter_out(line: &str, patterns: &[Vec<String>]) -> bool {
-    for clauses in patterns {
-        if contains_all(line, clauses) {
+fn filter_out(line: &str, terms: &[FilterTerm]) -> bool {
+    for term in terms {
+        if contains_all(line, term.clauses()) {
             return true;
         }
     }
     false
 }
 
-fn filter_in(line: &str, patterns: &[Vec<String>]) -> bool {
-    if patterns.is_empty() {
+fn filter_in(line: &str, terms: &[FilterTerm]) -> bool {
+    if terms.is_empty() {
         return true;
     }
-    for clauses in patterns {
-        if contains_all(line, clauses) {
+    for term in terms {
+        if contains_all(line, term.clauses()) {
             return true;
         }
     }
