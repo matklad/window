@@ -48,7 +48,7 @@ fn main() {
     let mmap = unsafe { memmap2::Mmap::map(&file) }
         .unwrap_or_else(|err| fatal!("can't mmap {}: {}", source_path.display(), err));
 
-    let mut window = Window {
+    let window_default = Window {
         reverse: false,
         position: Position::Relative(0.0),
         anchor: String::new(),
@@ -58,18 +58,31 @@ fn main() {
         filter_in: Vec::new(),
         filter_out: Vec::new(),
     };
-    let mut error = String::new();
+    let window_existing = std::fs::read_to_string(control_path)
+        .ok()
+        .and_then(|it| toml::from_str::<Window>(&it).ok());
+
+    let mut window = window_existing.unwrap_or(window_default);
+
     let window_toml = toml::to_string(&window).unwrap();
     std::fs::write(&control_path, &window_toml)
         .unwrap_or_else(|err| fatal!("can't write {}: {}", target_path.display(), err));
 
+    let mut error = String::new();
     let mut buf = Vec::new();
-    loop {
-        let mut ctx = Context { window: &window, source: &mmap, target: &mut buf };
-        ctx.compute();
+    for seq in 0u32.. {
+        let mut ctx = Context {
+            window: &window,
+            source: &mmap,
+            target: &mut buf,
+        };
+        ctx.compute(seq);
         std::fs::write(&target_path, &ctx.target)
             .unwrap_or_else(|err| fatal!("can't write {}: {}", target_path.display(), err));
+
         loop {
+            // Inner loop --- re-read config file until it is syntactically valid.
+
             std::thread::sleep(delay);
             let control = std::fs::read_to_string(control_path)
                 .unwrap_or_else(|err| fatal!("can't read {}: {}", control_path.display(), err));
@@ -100,16 +113,20 @@ struct Context<'a, 'b> {
 }
 
 impl<'a, 'b> Context<'a, 'b> {
-    fn compute(&mut self) {
+    fn compute(&mut self, seq: u32) {
         self.target.clear();
 
         let source = self.source_slice();
 
         let mut scratch = vec![0; self.window.target_bytes_max];
 
-        let (mut source_pos, mut scratch_pos) =
-            if self.window.reverse { (source.len(), scratch.len()) } else { (0, 0) };
+        let (mut source_pos, mut scratch_pos) = if self.window.reverse {
+            (source.len(), scratch.len())
+        } else {
+            (0, 0)
+        };
 
+        let mut first_match_pos: Option<usize> = None;
         let mut anchored = false;
         while (self.window.reverse && source_pos > 0)
             || (!self.window.reverse && source_pos < source.len())
@@ -126,16 +143,31 @@ impl<'a, 'b> Context<'a, 'b> {
             if !filter_in(line, &self.window.filter_in) {
                 continue;
             }
-            match copy(&mut scratch, &mut scratch_pos, line.as_bytes(), self.window.reverse) {
+            if first_match_pos.is_none() {
+                first_match_pos = Some(line.as_ptr() as usize - self.source.as_ptr() as usize);
+            }
+
+            match copy(
+                &mut scratch,
+                &mut scratch_pos,
+                line.as_bytes(),
+                self.window.reverse,
+            ) {
                 CopyResult::Copied => {}
                 CopyResult::NoSpace => break,
             }
         }
 
-        let result =
-            if self.window.reverse { &scratch[scratch_pos..] } else { &scratch[..scratch_pos] };
+        let result = if self.window.reverse {
+            &scratch[scratch_pos..]
+        } else {
+            &scratch[..scratch_pos]
+        };
 
         let result = trim_lines(result, self.window.target_lines_max, self.window.reverse);
+        self.target.extend(
+            format!("seq: {:03X} pos: {}\n\n", seq, first_match_pos.unwrap_or(0)).as_bytes(),
+        );
         self.target.extend(result);
     }
 
@@ -147,7 +179,11 @@ impl<'a, 'b> Context<'a, 'b> {
             &self.source[raw_index..]
         };
         trim_newline(
-            trim_length(source_slice_semi, self.window.source_bytes_max, self.window.reverse),
+            trim_length(
+                source_slice_semi,
+                self.window.source_bytes_max,
+                self.window.reverse,
+            ),
             self.window.reverse,
         )
     }
@@ -256,7 +292,9 @@ fn target_path_for_source(source: &Path) -> PathBuf {
     let parent = source.parent().unwrap_or(source);
     match source.file_stem() {
         Some(file_stem) => match source.extension().and_then(|it| it.to_str()) {
-            Some(it) => parent.join(file_stem).with_extension(format!("{it}.window")),
+            Some(it) => parent
+                .join(file_stem)
+                .with_extension(format!("{it}.window")),
             None => parent.join(file_stem).with_extension(".window"),
         },
         None => return source.join("output.window"),
@@ -265,12 +303,25 @@ fn target_path_for_source(source: &Path) -> PathBuf {
 
 fn trim_lines(source: &[u8], limit: usize, reverse: bool) -> &[u8] {
     if reverse {
-        match source.iter().copied().enumerate().rev().filter(|it| it.1 == b'\n').nth(limit) {
+        match source
+            .iter()
+            .copied()
+            .enumerate()
+            .rev()
+            .filter(|it| it.1 == b'\n')
+            .nth(limit)
+        {
             Some((index, _)) => &source[index + 1..],
             None => source,
         }
     } else {
-        match source.iter().copied().enumerate().filter(|it| it.1 == b'\n').nth(limit) {
+        match source
+            .iter()
+            .copied()
+            .enumerate()
+            .filter(|it| it.1 == b'\n')
+            .nth(limit)
+        {
             Some((index, _)) => &source[..index + 1],
             None => source,
         }
@@ -290,8 +341,10 @@ impl FromStr for Position {
 
     fn from_str(s: &str) -> Result<Self, Self::Err> {
         if let Some(percentage) = s.strip_suffix('%') {
-            let percentage =
-                percentage.parse::<f64>().map_err(|it| it.to_string())?.clamp(0.0, 100.0);
+            let percentage = percentage
+                .parse::<f64>()
+                .map_err(|it| it.to_string())?
+                .clamp(0.0, 100.0);
             return Ok(Position::Relative(percentage / 100.0));
         }
         let mut multiplier = 1;
