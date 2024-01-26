@@ -36,3 +36,20 @@ That means:
 
 See the source code: at the moment, this is a tool for my personal use, so I haven't invested any
 time into making it user friendly, beyond writing this readme.
+
+
+## Design Notes
+
+`window` combines insights from rust-analyzer and TigerBeetle:
+
+* `target_bytes_max` comes from rust-analyzer --- the end consumer of any tool's output is a human.
+  Humans are notoriously slow and are incapable of processing more than a hundred lines at a time.
+  So, any processing should be hard-capped to produce at most a screenfull of output. If that's not
+  enough, the correct solution is for the user to refine the query, rather than for the computer to
+  burry the human in a needle-laced haystack.
+
+* `source_bytes_max` comes from `TigerBeetle` --- although default programming model is to treat all
+  resources as virtually unlimited (the only enforced limit is the 64-bit size of the address
+  space), any real software running on a real hardware will have _some_ limits on the size of the
+  dataset it can process. By _starting_ from the explicit limits, the software can become
+  qualitatively more reliable, and usually much snappier as well!
