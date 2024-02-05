@@ -24,6 +24,16 @@ struct Window {
     filter_out: Vec<FilterTerm>,
 }
 
+impl Window {
+    pub fn parse(text: &str) -> Result<Window, toml::de::Error> {
+        toml::from_str(text)
+    }
+
+    pub fn display(&self) -> String {
+        toml::to_string_pretty(self).unwrap()
+    }
+}
+
 #[derive(Debug, serde::Serialize, serde::Deserialize, PartialEq)]
 #[serde(untagged)]
 enum FilterTerm {
@@ -76,11 +86,11 @@ fn main() {
     };
     let window_existing = std::fs::read_to_string(control_path)
         .ok()
-        .and_then(|it| toml::from_str::<Window>(&it).ok());
+        .and_then(|it| Window::parse(&it).ok());
 
     let mut window = window_existing.unwrap_or(window_default);
 
-    let window_toml = toml::to_string(&window).unwrap();
+    let window_toml = window.display();
     std::fs::write(&control_path, &window_toml)
         .unwrap_or_else(|err| fatal!("can't write {}: {}", target_path.display(), err));
 
@@ -105,7 +115,7 @@ fn main() {
             std::thread::sleep(delay);
             let control = std::fs::read_to_string(control_path)
                 .unwrap_or_else(|err| fatal!("can't read {}: {}", control_path.display(), err));
-            match toml::from_str(&control) {
+            match Window::parse(&control) {
                 Ok(new_window) if new_window != window => {
                     window = new_window;
                     eprintln!("{window:?}");
@@ -197,14 +207,21 @@ impl<'a, 'b> Context<'a, 'b> {
         } else {
             &self.source[raw_index..]
         };
-        trim_newline(
-            trim_length(
-                source_slice_semi,
-                self.window.source_bytes_max,
-                self.window.reverse,
-            ),
+        let source_slice = trim_length(
+            source_slice_semi,
+            self.window.source_bytes_max,
             self.window.reverse,
-        )
+        );
+        if self.window.reverse {
+            if raw_index == self.source.len() || self.source[raw_index + 1] == b'\n' {
+                return source_slice;
+            }
+        } else {
+            if raw_index == 0 || self.source[raw_index - 1] == b'\n' {
+                return source_slice;
+            }
+        }
+        trim_newline(source_slice, self.window.reverse)
     }
 }
 
@@ -398,5 +415,133 @@ impl Position {
             Position::Absolute(it) => it,
         }
         .clamp(0, len)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use expect_test::expect;
+
+    use super::*;
+
+    fn check(window: &str, input: &str, want: expect_test::Expect) {
+        let window = Window::parse(window).unwrap();
+        let mut result = Vec::new();
+        let mut ctx = Context {
+            window: &window,
+            source: input.as_bytes(),
+            target: &mut result,
+        };
+        ctx.compute(0);
+        let got = String::from_utf8(result).unwrap();
+        want.assert_eq(&got);
+    }
+
+    #[test]
+    fn empty() {
+        check(
+            r#"
+reverse = false
+position = "0%"
+anchor = ""
+source_bytes_max = 104857600
+target_bytes_max = 102400
+target_lines_max = 50
+filter_in = []
+filter_out = []
+        "#,
+            "",
+            expect![[r#"
+                seq: 000 pos: 0
+
+            "#]],
+        );
+    }
+
+    #[test]
+    fn all() {
+        check(
+            r#"
+reverse = false
+position = "0%"
+anchor = ""
+source_bytes_max = 104857600
+target_bytes_max = 102400
+target_lines_max = 50
+filter_in = []
+filter_out = []
+        "#,
+            "aaa\nbbb\nccc\n",
+            expect![[r#"
+                seq: 000 pos: 0
+
+                aaa
+                bbb
+                ccc
+            "#]],
+        );
+    }
+
+    #[test]
+    fn filter_in() {
+        check(
+            r#"
+reverse = false
+position = "0%"
+anchor = ""
+source_bytes_max = 104857600
+target_bytes_max = 102400
+target_lines_max = 50
+filter_in = ["b"]
+filter_out = []
+        "#,
+            "aaa\nbbb\nccc",
+            expect![[r#"
+                seq: 000 pos: 4
+
+                bbb
+            "#]],
+        );
+    }
+
+    #[test]
+    fn anchor() {
+        check(
+            r#"
+reverse = false
+position = "0%"
+anchor = "b"
+source_bytes_max = 104857600
+target_bytes_max = 102400
+target_lines_max = 50
+filter_in = []
+filter_out = []
+        "#,
+            "aaa\nbbb\nccc",
+            expect![[r#"
+                seq: 000 pos: 4
+
+                bbb
+                ccc"#]],
+        );
+
+        check(
+            r#"
+reverse = false
+position = "4"
+anchor = ""
+source_bytes_max = 104857600
+target_bytes_max = 102400
+target_lines_max = 50
+filter_in = []
+filter_out = []
+        "#,
+            "aaa\nbbb\nccc",
+            expect![[r#"
+                seq: 000 pos: 4
+
+                bbb
+                ccc"#]],
+        );
     }
 }
