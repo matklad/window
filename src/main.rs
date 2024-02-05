@@ -84,6 +84,9 @@ fn main() {
     std::fs::write(&control_path, &window_toml)
         .unwrap_or_else(|err| fatal!("can't write {}: {}", target_path.display(), err));
 
+    eprintln!("Control: {}", control_path.display());
+    eprintln!("Result:  {}", target_path.display());
+
     let mut error = String::new();
     let mut buf = Vec::new();
     for seq in 0u32.. {
