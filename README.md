@@ -53,3 +53,6 @@ time into making it user friendly, beyond writing this readme.
   space), any real software running on a real hardware will have _some_ limits on the size of the
   dataset it can process. By _starting_ from the explicit limits, the software can become
   qualitatively more reliable, and usually much snappier as well!
+
+See <https://matklad.github.io/2024/02/10/window-live-constant-time-grep.html> for an expanded
+discussion.
