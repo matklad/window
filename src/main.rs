@@ -72,8 +72,8 @@ fn parse_args() -> Args {
 Usage:
   window <file>
 
-window filters <file> according to the query specified in window.toml
-and writes result to <file>.window.
+window filters <file> according to the query specified in window.toml.
+The result is written to <file>.window.
 "
             );
             std::process::exit(0);
