@@ -1,6 +1,7 @@
 use std::{
     fmt,
-    fs::File,
+    fs::{self, File},
+    io::{self, Write},
     path::{Path, PathBuf},
     str::FromStr,
 };
@@ -20,8 +21,8 @@ struct Window {
     source_bytes_max: usize,
     target_bytes_max: usize,
     target_lines_max: usize,
-    filter_in: Vec<FilterTerm>,
-    filter_out: Vec<FilterTerm>,
+    filter_in: Vec<FilterClause>,
+    filter_out: Vec<FilterClause>,
 }
 
 impl Window {
@@ -36,16 +37,16 @@ impl Window {
 
 #[derive(Debug, serde::Serialize, serde::Deserialize, PartialEq)]
 #[serde(untagged)]
-enum FilterTerm {
+enum FilterClause {
     String(String),
     Vec(Vec<String>),
 }
 
-impl FilterTerm {
-    fn clauses(&self) -> &[String] {
+impl FilterClause {
+    fn literals(&self) -> &[String] {
         match self {
-            FilterTerm::String(it) => std::slice::from_ref(it),
-            FilterTerm::Vec(it) => it.as_slice(),
+            FilterClause::String(it) => std::slice::from_ref(it),
+            FilterClause::Vec(it) => it.as_slice(),
         }
     }
 }
@@ -55,17 +56,44 @@ const KiB: usize = 1024;
 #[allow(non_upper_case_globals)]
 const MiB: usize = 1024 * KiB;
 
+struct Args {
+    path: PathBuf,
+}
+
+fn parse_args() -> Args {
+    let mut path: Option<PathBuf> = None;
+    let mut args_os = std::env::args_os();
+    _ = args_os.next();
+
+    for arg in args_os {
+        if arg.to_str() == Some("-h") || arg.to_str() == Some("--help") {
+            println!(
+                "\
+Usage:
+  window <file>
+
+window filters <file> according to the query specified in window.toml
+and writes result to <file>.window.
+"
+            );
+            std::process::exit(0);
+        }
+        if path.is_some() {
+            fatal!("expected a single argument");
+        }
+        path = Some(PathBuf::from(arg));
+    }
+    let Some(path) = path else {
+        fatal!("window requires a <file> argument");
+    };
+    Args { path }
+}
+
 fn main() {
     let delay = std::time::Duration::from_millis(100);
 
-    xflags::xflags! {
-        cmd w {
-            required path: PathBuf
-        }
-
-    };
-    let flags = W::from_env_or_exit();
-    let source_path = flags.path.as_path();
+    let args = parse_args();
+    let source_path = args.path.as_path();
     let target_path = target_path_for_source(source_path);
     let control_path = Path::new("window.toml");
 
@@ -90,24 +118,24 @@ fn main() {
 
     let mut window = window_existing.unwrap_or(window_default);
 
-    let window_toml = window.display();
-    std::fs::write(&control_path, &window_toml)
+    std::fs::write(&control_path, &window.display())
         .unwrap_or_else(|err| fatal!("can't write {}: {}", target_path.display(), err));
 
-    eprintln!("Control: {}", control_path.display());
-    eprintln!("Result:  {}", target_path.display());
+    eprintln!("Control file: {}", control_path.display());
+    eprintln!("Results file: {}", target_path.display());
 
     let mut error = String::new();
     let mut buf = Vec::new();
-    for seq in 0u32.. {
+    loop {
         let mut ctx = Context {
             window: &window,
             source: &mmap,
+            first_match: 0,
             target: &mut buf,
         };
-        ctx.compute(seq);
-        std::fs::write(&target_path, &ctx.target)
-            .unwrap_or_else(|err| fatal!("can't write {}: {}", target_path.display(), err));
+
+        ctx.compute();
+        ctx.write(&target_path, &error);
 
         loop {
             // Inner loop --- re-read config file until it is syntactically valid.
@@ -116,19 +144,22 @@ fn main() {
             let control = std::fs::read_to_string(control_path)
                 .unwrap_or_else(|err| fatal!("can't read {}: {}", control_path.display(), err));
             match Window::parse(&control) {
-                Ok(new_window) if new_window != window => {
-                    window = new_window;
-                    eprintln!("{window:?}");
-                    break;
+                Ok(new_window) => {
+                    if !error.is_empty() {
+                        error.clear();
+                        ctx.write(&target_path, &error);
+                    }
+                    if new_window != window {
+                        window = new_window;
+                        break;
+                    }
                 }
-                Ok(_) => continue,
                 Err(err) => {
                     let new_error = err.to_string();
                     if error != new_error {
-                        eprintln!("{new_error}");
                         error = new_error;
+                        ctx.write(&target_path, &error)
                     }
-                    continue;
                 }
             }
         }
@@ -138,11 +169,12 @@ fn main() {
 struct Context<'a, 'b> {
     window: &'a Window,
     source: &'a [u8],
+    first_match: usize,
     target: &'b mut Vec<u8>,
 }
 
 impl<'a, 'b> Context<'a, 'b> {
-    fn compute(&mut self, seq: u32) {
+    fn compute(&mut self) {
         self.target.clear();
 
         let source = self.source_slice();
@@ -194,10 +226,23 @@ impl<'a, 'b> Context<'a, 'b> {
         };
 
         let result = trim_lines(result, self.window.target_lines_max, self.window.reverse);
-        self.target.extend(
-            format!("seq: {:03X} pos: {}\n\n", seq, first_match_pos.unwrap_or(0)).as_bytes(),
-        );
+        self.first_match = first_match_pos.unwrap_or(0);
         self.target.extend(result);
+    }
+
+    fn write(&self, target: &Path, error: &str) {
+        fs::File::create(target)
+            .and_then(|mut file| self.write_inner(&mut file, error))
+            .unwrap_or_else(|err| fatal!("can't write {}: {}", target.display(), err))
+    }
+
+    fn write_inner(&self, target: &mut dyn Write, error: &str) -> io::Result<()> {
+        if !error.is_empty() {
+            target.write_all(format!("error: {}\n", error).as_bytes())?;
+        }
+        target.write_all(format!("pos: {}\n", self.first_match).as_bytes())?;
+        target.write_all(&self.target)?;
+        Ok(())
     }
 
     fn source_slice(&self) -> &'a [u8] {
@@ -255,21 +300,21 @@ fn next_line<'a>(source: &'a [u8], source_pos: &mut usize, reverse: bool) -> &'a
     }
 }
 
-fn filter_out(line: &str, terms: &[FilterTerm]) -> bool {
-    for term in terms {
-        if contains_all(line, term.clauses()) {
+fn filter_out(line: &str, clauses: &[FilterClause]) -> bool {
+    for clause in clauses {
+        if contains_all(line, clause.literals()) {
             return true;
         }
     }
     false
 }
 
-fn filter_in(line: &str, terms: &[FilterTerm]) -> bool {
-    if terms.is_empty() {
+fn filter_in(line: &str, clauses: &[FilterClause]) -> bool {
+    if clauses.is_empty() {
         return true;
     }
-    for term in terms {
-        if contains_all(line, term.clauses()) {
+    for clause in clauses {
+        if contains_all(line, clause.literals()) {
             return true;
         }
     }
@@ -426,13 +471,16 @@ mod tests {
 
     fn check(window: &str, input: &str, want: expect_test::Expect) {
         let window = Window::parse(window).unwrap();
-        let mut result = Vec::new();
+        let mut target = Vec::new();
         let mut ctx = Context {
             window: &window,
             source: input.as_bytes(),
-            target: &mut result,
+            target: &mut target,
+            first_match: 0,
         };
-        ctx.compute(0);
+        ctx.compute();
+        let mut result = Vec::new();
+        ctx.write_inner(&mut result, "").unwrap();
         let got = String::from_utf8(result).unwrap();
         want.assert_eq(&got);
     }
@@ -452,8 +500,7 @@ filter_out = []
         "#,
             "",
             expect![[r#"
-                seq: 000 pos: 0
-
+                pos: 0
             "#]],
         );
     }
@@ -473,8 +520,7 @@ filter_out = []
         "#,
             "aaa\nbbb\nccc\n",
             expect![[r#"
-                seq: 000 pos: 0
-
+                pos: 0
                 aaa
                 bbb
                 ccc
@@ -497,8 +543,7 @@ filter_out = []
         "#,
             "aaa\nbbb\nccc",
             expect![[r#"
-                seq: 000 pos: 4
-
+                pos: 4
                 bbb
             "#]],
         );
@@ -519,8 +564,7 @@ filter_out = []
         "#,
             "aaa\nbbb\nccc",
             expect![[r#"
-                seq: 000 pos: 4
-
+                pos: 4
                 bbb
                 ccc"#]],
         );
@@ -538,8 +582,7 @@ filter_out = []
         "#,
             "aaa\nbbb\nccc",
             expect![[r#"
-                seq: 000 pos: 4
-
+                pos: 4
                 bbb
                 ccc"#]],
         );

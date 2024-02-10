@@ -9,7 +9,6 @@ memmap2 = "0.9.0"
 serde = { version = "1.0.193", features = ["derive"] }
 serde_with = "3.4.0"
 toml = "0.8.8"
-xflags = "0.3.1"
 
 [dev-dependencies]
 expect-test = "1.4.1"
