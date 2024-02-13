@@ -27,7 +27,14 @@ struct Window {
 
 impl Window {
     pub fn parse(text: &str) -> Result<Window, toml::de::Error> {
-        toml::from_str(text)
+        let mut result: Window = toml::from_str(text)?;
+        if result.position == Position::Relative(0.0) {
+            result.reverse = false;
+        }
+        if result.position == Position::Relative(1.0) {
+            result.reverse = true;
+        }
+        Ok(result)
     }
 
     pub fn display(&self) -> String {
@@ -454,12 +461,12 @@ impl fmt::Display for Position {
 }
 
 impl Position {
-    fn to_absolute(&self, len: usize) -> usize {
+    fn to_absolute(&self, total_size: usize) -> usize {
         match *self {
-            Position::Relative(it) => ((len as f64) * it) as usize,
+            Position::Relative(it) => ((total_size as f64) * it) as usize,
             Position::Absolute(it) => it,
         }
-        .clamp(0, len)
+        .clamp(0, total_size)
     }
 }
 
