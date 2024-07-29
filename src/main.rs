@@ -23,6 +23,7 @@ struct Window {
     target_lines_max: usize,
     filter_in: Vec<FilterClause>,
     filter_out: Vec<FilterClause>,
+    sort: bool,
 }
 
 impl Window {
@@ -118,6 +119,7 @@ fn main() {
         target_lines_max: 50,
         filter_in: Vec::new(),
         filter_out: Vec::new(),
+        sort: false,
     };
     let window_existing = std::fs::read_to_string(control_path)
         .ok()
@@ -235,6 +237,18 @@ impl<'a, 'b> Context<'a, 'b> {
         let result = trim_lines(result, self.window.target_lines_max, self.window.reverse);
         self.first_match = first_match_pos.unwrap_or(0);
         self.target.extend(result);
+        if self.window.sort {
+            self.compute_sort();
+        }
+    }
+
+    fn compute_sort(&mut self) {
+        let mut lines: Vec<&[u8]> = self.target.split_inclusive(|&it| it == b'\n').collect();
+        lines.sort();
+        lines.dedup();
+        let lines = lines.concat();
+        self.target.clear();
+        self.target.extend(lines);
     }
 
     fn write(&self, target: &Path, error: &str) {
