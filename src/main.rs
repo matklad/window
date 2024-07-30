@@ -39,7 +39,29 @@ impl Window {
     }
 
     pub fn display(&self) -> String {
-        toml::to_string_pretty(self).unwrap()
+        let ugly = toml::to_string_pretty(self).unwrap();
+        let (prefix, work) = ugly.split_once("\nsource_bytes_max = ").unwrap();
+        let (number, suffix) = work.split_once("\n").unwrap();
+        let number: u64 = number.parse().unwrap();
+        return format!(
+            "{prefix}\nsource_bytes_max = {}\n{suffix}",
+            format_u64_with_underscores(number)
+        );
+
+        fn format_u64_with_underscores(num: u64) -> String {
+            let num_str = num.to_string();
+            let mut result = String::new();
+            let len = num_str.len();
+
+            for (i, c) in num_str.chars().enumerate() {
+                if i > 0 && (len - i) % 3 == 0 {
+                    result.push('_');
+                }
+                result.push(c);
+            }
+
+            result
+        }
     }
 }
 

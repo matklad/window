@@ -1,0 +1,9 @@
+reverse = false
+position = "0%"
+anchor = ""
+source_bytes_max = 104_857_600
+target_bytes_max = 102400
+target_lines_max = 50
+filter_in = []
+filter_out = []
+sort = false
