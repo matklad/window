@@ -17,7 +17,7 @@ macro_rules! fatal {
 struct Window {
     reverse: bool,
     position: Position,
-    anchor: String,
+    anchor: FilterClause,
     source_bytes_max: usize,
     target_bytes_max: usize,
     target_lines_max: usize,
@@ -135,7 +135,7 @@ fn main() {
     let window_default = Window {
         reverse: false,
         position: Position::Relative(0.0),
-        anchor: String::new(),
+        anchor: FilterClause::String(String::new()),
         source_bytes_max: 100 * MiB,
         target_bytes_max: 100 * KiB,
         target_lines_max: 50,
@@ -225,7 +225,7 @@ impl<'a, 'b> Context<'a, 'b> {
         {
             let line = next_line(source, &mut source_pos, self.window.reverse);
             let line = std::str::from_utf8(line).unwrap_or("���\n");
-            anchored = anchored || line.contains(&self.window.anchor);
+            anchored = anchored || contains_all(line, self.window.anchor.literals());
             if !anchored {
                 continue;
             }
