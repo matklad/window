@@ -540,6 +540,7 @@ target_bytes_max = 102400
 target_lines_max = 50
 filter_in = []
 filter_out = []
+sort = true
         "#,
             "",
             expect![[r#"
@@ -560,6 +561,7 @@ target_bytes_max = 102400
 target_lines_max = 50
 filter_in = []
 filter_out = []
+sort = true
         "#,
             "aaa\nbbb\nccc\n",
             expect![[r#"
@@ -583,6 +585,7 @@ target_bytes_max = 102400
 target_lines_max = 50
 filter_in = ["b"]
 filter_out = []
+sort = true
         "#,
             "aaa\nbbb\nccc",
             expect![[r#"
@@ -604,6 +607,7 @@ target_bytes_max = 102400
 target_lines_max = 50
 filter_in = []
 filter_out = []
+sort = true
         "#,
             "aaa\nbbb\nccc",
             expect![[r#"
@@ -622,6 +626,7 @@ target_bytes_max = 102400
 target_lines_max = 50
 filter_in = []
 filter_out = []
+sort = true
         "#,
             "aaa\nbbb\nccc",
             expect![[r#"
