@@ -28,6 +28,10 @@ struct Window {
 
 impl Window {
     pub fn parse(text: &str) -> Result<Window, toml::de::Error> {
+        let text = match text.split_once("----") {
+            Some((toml, _notes)) => toml,
+            None => text,
+        };
         let mut result: Window = toml::from_str(text)?;
         if result.position == Position::Relative(0.0) {
             result.reverse = false;
