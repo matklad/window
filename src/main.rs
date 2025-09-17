@@ -476,9 +476,9 @@ impl FromStr for Position {
             return Ok(Position::Relative(percentage / 100.0));
         }
         let mut multiplier = 1;
-        for suffixes in ["kM", "mM", "gG"] {
+        for letter in ['k', 'm', 'g'] {
             multiplier *= 1024;
-            for suffix in suffixes.chars() {
+            for suffix in [letter, letter.to_ascii_uppercase()] {
                 if let Some(value) = s.strip_suffix(suffix) {
                     let value = value.parse::<f64>().map_err(|it| it.to_string())?;
                     let value = (value * (multiplier as f64)) as usize;
